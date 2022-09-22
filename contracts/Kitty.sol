@@ -19,13 +19,41 @@ contract KittyContract is IERC721, Ownable{
     }
 
     Kitty[] kitties;
-    
-    mapping (address => uint) public balances;
+
+    mapping (address => uint) balances;
     mapping (uint => address) public tokenOwner;
+    mapping (uint => address) public tokenApprovedTo;
+    mapping (address => mapping (address => bool)) private operatorApprovals;
 
     uint256 public gen0Counter;
 
     event Birth(address owner, uint kittyId, uint genes, uint mumId, uint dadId);
+
+    function approve(address _approved, uint256 _tokenId) external {
+        require(_owns(msg.sender, _tokenId));
+        _approve(_approved, _tokenId);
+
+        emit Approval(msg.sender, _approved,_tokenId);
+    }
+
+    function setApprovalForAll(address _operator, bool _approved) external{
+        require(msg.sender != _operator);
+        operatorApprovals[msg.sender][_operator] = _approved;
+        emit ApprovalForAll(msg.sender, _operator, _approved);
+    }
+
+    function getApproved(uint256 _tokenId) external view returns (address){
+        require(_tokenId < kitties.length);
+        return tokenApprovedTo[_tokenId];
+    }
+
+    function isApprovedForAll(address _owner, address _operator) external view returns (bool){
+        return operatorApprovals[_owner][_operator];
+    }
+
+    function _approve(address _approved, uint256 _tokenId) internal {
+        tokenApprovedTo[_tokenId] = _approved;
+    }
 
     function createKittyGen0(uint _genes) public onlyOwner{
         require(gen0Counter < LIMIT_GEN0);
@@ -84,7 +112,7 @@ contract KittyContract is IERC721, Ownable{
     function transfer(address to, uint256 tokenId) external{
         require(to != address(0));
         require(to != address(this));
-        require(tokenOwner[tokenId] == msg.sender);
+        require(_owns(msg.sender, tokenId));
         _transfer(msg.sender, to, tokenId);
     }
 
@@ -93,8 +121,13 @@ contract KittyContract is IERC721, Ownable{
         tokenOwner[_tokenId] = _to;
         if(_from != address(0)){
             balances[_from]--;
+            delete tokenApprovedTo[_tokenId];
         }
         emit Transfer(_from, _to, _tokenId);
+    }
+
+    function _owns(address _owner, uint256 _tokenId) internal view returns (bool) {
+        return tokenOwner[_tokenId] == _owner;
     }
 
 }
