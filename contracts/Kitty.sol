@@ -2,6 +2,7 @@
 
 pragma solidity 0.8.17;
 import "./IERC721.sol";
+import "./IERC721Receiver.sol";
 import "./Ownable.sol";
 
 contract KittyContract is IERC721, Ownable{
@@ -9,6 +10,28 @@ contract KittyContract is IERC721, Ownable{
     string public constant name = "ZKitties";
     string public constant symbol = "ZK";
     uint public constant LIMIT_GEN0 = 10;
+    bytes4 internal constant ERC721_RECEIVED = bytes4(keccak256("onERC721Received(address,address,uint256,bytes)"));
+
+    /*
+     *     bytes4(keccak256('balanceOf(address)')) == 0x70a08231
+     *     bytes4(keccak256('ownerOf(uint256)')) == 0x6352211e
+     *     bytes4(keccak256('approve(address,uint256)')) == 0x095ea7b3
+     *     bytes4(keccak256('getApproved(uint256)')) == 0x081812fc
+     *     bytes4(keccak256('setApprovalForAll(address,bool)')) == 0xa22cb465
+     *     bytes4(keccak256('isApprovedForAll(address,address)')) == 0xe985e9c5
+     *     bytes4(keccak256('transferFrom(address,address,uint256)')) == 0x23b872dd
+     *     bytes4(keccak256('safeTransferFrom(address,address,uint256)')) == 0x42842e0e
+     *     bytes4(keccak256('safeTransferFrom(address,address,uint256,bytes)')) == 0xb88d4fde
+     *
+     *     => 0x70a08231 ^ 0x6352211e ^ 0x095ea7b3 ^ 0x081812fc ^
+     *        0xa22cb465 ^ 0xe985e9c ^ 0x23b872dd ^ 0x42842e0e ^ 0xb88d4fde == 0x80ac58cd
+     */
+    bytes4 private constant _INTERFACE_ID_ERC721 = 0x80ac58cd;
+
+    /*
+     *     bytes4(keccak256('supportsInterface(bytes4)'));
+     */
+    bytes4 private constant _INTERFACE_ID_ERC165 = 0x01ffc9a7;
 
     struct Kitty{
         uint256 genes;
@@ -29,6 +52,10 @@ contract KittyContract is IERC721, Ownable{
 
     event Birth(address owner, uint kittyId, uint genes, uint mumId, uint dadId);
 
+    function supportsInterface(bytes4 _interfaceId) external pure returns (bool){
+        return ( _interfaceId == _INTERFACE_ID_ERC721 || _interfaceId == _INTERFACE_ID_ERC165);
+    }
+
     function approve(address _approved, uint256 _tokenId) external {
         require(_owns(msg.sender, _tokenId));
         _approve(_approved, _tokenId);
@@ -42,18 +69,14 @@ contract KittyContract is IERC721, Ownable{
         emit ApprovalForAll(msg.sender, _operator, _approved);
     }
 
-    function getApproved(uint256 _tokenId) external view returns (address){
-        require(_tokenId < kitties.length);
+    function getApproved(uint256 _tokenId) external view isValidToken(_tokenId) returns (address){
         return tokenApprovedTo[_tokenId];
     }
 
-    function isApprovedForAll(address _owner, address _operator) external view returns (bool){
+    function isApprovedForAll(address _owner, address _operator) public view returns (bool){
         return operatorApprovals[_owner][_operator];
     }
 
-    function _approve(address _approved, uint256 _tokenId) internal {
-        tokenApprovedTo[_tokenId] = _approved;
-    }
 
     function createKittyGen0(uint _genes) public onlyOwner{
         require(gen0Counter < LIMIT_GEN0);
@@ -76,6 +99,39 @@ contract KittyContract is IERC721, Ownable{
             generation = uint256(kitty.generation);
         }
 
+    function balanceOf(address owner) external view returns (uint256){
+        return balances[owner];
+    }
+
+    function totalSupply() external view returns (uint256){
+        return kitties.length;
+    }
+
+    function ownerOf(uint256 tokenId) external view returns (address){
+        return tokenOwner[tokenId];
+    }
+
+    function transfer(address to, uint256 tokenId) external isValidAddress(to){
+        require(to != address(this));
+        require(_owns(msg.sender, tokenId));
+        _transfer(msg.sender, to, tokenId);
+    }
+
+    function transferFrom(address _from, address _to, uint256 _tokenId) external isValidAddress(_to) onlyOwner isValidToken(_tokenId){
+        require(_from == msg.sender || _approvedFor(_tokenId,_from) || operatorApprovals[_from][msg.sender]);
+        _transfer(msg.sender, _to, _tokenId);
+    }
+
+    modifier isValidAddress(address _address){
+        require(_address != address(0));
+        _;
+    }
+
+    modifier isValidToken(uint _tokenId){
+        require(_tokenId < kitties.length);
+        _;
+    }
+
     function _createKitty(
         uint256 _genes,
         uint32 _mumId,
@@ -97,23 +153,18 @@ contract KittyContract is IERC721, Ownable{
         return kittyId;
     }
 
-    function balanceOf(address owner) external view returns (uint256){
-        return balances[owner];
+   function safeTransferFrom(address _from, address _to, uint256 _tokenId) public {
+        safeTransferFrom(_from, _to, _tokenId, "");
     }
 
-    function totalSupply() external view returns (uint256){
-        return kitties.length;
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId, bytes memory _data) public {
+        require( _isApprovedOrOwner(msg.sender, _from, _to, _tokenId) );
+        _safeTransfer(_from, _to, _tokenId, _data);
     }
 
-    function ownerOf(uint256 tokenId) external view returns (address){
-        return tokenOwner[tokenId];
-    }
-
-    function transfer(address to, uint256 tokenId) external{
-        require(to != address(0));
-        require(to != address(this));
-        require(_owns(msg.sender, tokenId));
-        _transfer(msg.sender, to, tokenId);
+    function _safeTransfer(address _from, address _to, uint256 _tokenId, bytes memory _data) internal{
+        _transfer(_from, _to, _tokenId);
+        require( _checkERC721Support(_from, _to, _tokenId, _data) );
     }
 
     function _transfer(address _from, address _to, uint256 _tokenId) internal{
@@ -130,6 +181,36 @@ contract KittyContract is IERC721, Ownable{
         return tokenOwner[_tokenId] == _owner;
     }
 
+    function _approve(address _approved, uint256 _tokenId) internal {
+        tokenApprovedTo[_tokenId] = _approved;
+    }
+
+    function _approvedFor(uint _tokenId, address _approvedTo) internal view returns(bool){
+        return tokenApprovedTo[_tokenId] == _approvedTo;
+    }
+
+    function _checkERC721Support(address _from, address _to, uint _tokenId, bytes memory data) internal returns (bool){
+        if(!_isContract(_to)){
+            return true;
+        }
+
+        bytes4 returnData = IERC721Receiver(_to).onERC721Received(msg.sender, _from, _tokenId, data);
+        return returnData == ERC721_RECEIVED;
+    }
+
+    function _isContract(address _to) internal view returns (bool){
+        uint32 size;
+        assembly{
+            size := extcodesize(_to)
+        }
+        return size > 0;
+    }
+
+    function _isApprovedOrOwner(address _spender, address _from, address _to, uint256 _tokenId) internal view isValidAddress(_to) isValidToken(_tokenId) returns (bool) {
+        require(_owns(_from, _tokenId)); 
+        
+        return (_spender == _from || _approvedFor(_tokenId, _from) || isApprovedForAll(_from, _spender));
+    }
 }
 
 
