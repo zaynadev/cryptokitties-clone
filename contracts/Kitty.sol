@@ -56,6 +56,33 @@ contract KittyContract is IERC721, Ownable{
         return ( _interfaceId == _INTERFACE_ID_ERC721 || _interfaceId == _INTERFACE_ID_ERC165);
     }
 
+    function breed(uint256 _dadId, uint256 _mumId) public returns (uint256){
+        require(_owns(msg.sender, _dadId), "The user doesn't own the token");
+        require(_owns(msg.sender, _mumId), "The user doesn't own the token");
+
+        ( uint256 dadDna,,,,uint256 DadGeneration ) = getKitty(_dadId);
+
+        ( uint256 mumDna,,,,uint256 MumGeneration ) = getKitty(_mumId);
+        
+        uint256 newDna = _mixDna(dadDna, mumDna);
+
+        uint256 kidGen = 0;
+        if (DadGeneration < MumGeneration){
+            kidGen = MumGeneration + 1;
+            kidGen /= 2;
+        } else if (DadGeneration > MumGeneration){
+            kidGen = DadGeneration + 1;
+            kidGen /= 2;
+        } else{
+            kidGen = MumGeneration + 1;
+        }
+
+        _createKitty(_mumId, _dadId, kidGen, newDna, msg.sender);
+
+        return newDna;
+    }
+    
+
     function approve(address _approved, uint256 _tokenId) external {
         require(_owns(msg.sender, _tokenId));
         _approve(_approved, _tokenId);
@@ -84,7 +111,7 @@ contract KittyContract is IERC721, Ownable{
         gen0Counter++;
     }
 
-    function getKitty(uint _id) external view returns(
+    function getKitty(uint _id) public view returns(
         uint256 genes,
         uint256 birthTime,
         uint256 mumId,
@@ -97,7 +124,19 @@ contract KittyContract is IERC721, Ownable{
             mumId = uint256(kitty.mumId);
             dadId = uint256(kitty.dadId);
             generation = uint256(kitty.generation);
+    }
+
+    function getKittyByOwner(address _owner) external view returns(uint[] memory) {
+        uint[] memory result = new uint[](balances[_owner]);
+        uint counter = 0;
+        for (uint i = 0; i < kitties.length; i++) {
+            if (tokenOwner[i] == _owner) {
+                result[counter] = i;
+                counter++;
+            }
         }
+        return result;
+    }
 
     function balanceOf(address owner) external view returns (uint256){
         return balances[owner];
@@ -134,9 +173,9 @@ contract KittyContract is IERC721, Ownable{
 
     function _createKitty(
         uint256 _genes,
-        uint32 _mumId,
-        uint32 _dadId,
-        uint16 _generation,
+        uint256 _mumId,
+        uint256 _dadId,
+        uint256 _generation,
         address _owner
     ) internal returns(uint256){
         Kitty memory kitty = Kitty(
@@ -144,7 +183,7 @@ contract KittyContract is IERC721, Ownable{
             uint64(block.timestamp),
             uint32(_mumId),
             uint32(_dadId),
-            _generation
+            uint16(_generation)
         );
         kitties.push(kitty);
         uint kittyId = kitties.length - 1;
@@ -210,6 +249,25 @@ contract KittyContract is IERC721, Ownable{
         require(_owns(_from, _tokenId)); 
         
         return (_spender == _from || _approvedFor(_tokenId, _from) || isApprovedForAll(_from, _spender));
+    }
+
+    function _mixDna(uint256 _dadDna, uint256 _mumDna) internal pure returns (uint256){
+        //dadDna: 11 22 33 44 55 66 77 88 
+        //mumDna: 88 77 66 55 44 33 22 11
+
+        uint256 firstHalf = _dadDna / 100000000; //11223344
+        uint256 secondHalf = _mumDna % 100000000; //88776655
+        
+        uint256 newDna = firstHalf * 100000000;
+        newDna = newDna + secondHalf; // 1122334488776655
+        return newDna;
+
+        //11 22 33 44 88 77 66 55
+
+        //10 + 20
+        //10 * 100 = 1000
+        //1000 + 20 = 1020
+    
     }
 }
 
